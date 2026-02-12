@@ -1,8 +1,8 @@
-name: Build → Push → Deploy (self-hosted EC2)
+name: Build-Push-Deploy (self-hosted EC2)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 env:
@@ -13,44 +13,32 @@ env:
 
 jobs:
   deploy:
-    runs-on: self-hosted   # Runs directly on your EC2 runner
+    runs-on: self-hosted
     steps:
-      # 0) Validate required secrets to fail fast with clear message
       - name: Validate required secrets
         run: |
           test -n "${{ secrets.DOCKER_USERNAME }}" || (echo "Missing secret: DOCKER_USERNAME" && exit 1)
-          test -n "${{ secrets.DOCKER_REPO }}"     || (echo "Missing secret: DOCKER_REPO" && exit 1)
+          test -n "${{ secrets.DOCKER_REPO }}" || (echo "Missing secret: DOCKER_REPO" && exit 1)
           test -n "${{ secrets.DOCKER_PASSWORD }}" || (echo "Missing secret: DOCKER_PASSWORD" && exit 1)
 
-      # 1) Checkout code from repo
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Show the resolved image name (helps confirm namespace)
       - name: Show target image
         run: echo "Target image is: $IMAGE:latest"
 
-      # 3) Fresh login to Docker Hub (logout first to avoid cached sessions)
       - name: Docker Hub Login
         run: |
           docker logout || true
-          echo "${{ secrets.DOCKER_PASSWORD }}" | \
-            docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      # 4) Build image
       - name: Build image
-        run: |
-          echo "Building image $IMAGE:latest ..."
-          docker build -t $IMAGE:latest .
+        run: docker build -t $IMAGE:latest .
 
-      # 5) Push image to Docker Hub (:latest)
       - name: Push image (:latest)
-        run: |
-          echo "Pushing $IMAGE:latest ..."
-          docker push $IMAGE:latest
+        run: docker push $IMAGE:latest
 
-      # 6) Deploy locally on EC2 using the latest image
-      - name: Deploy locally (stop old → run new → health check)
+      - name: Deploy locally (stop old, run new, health check)
         run: |
           set -euo pipefail
           IMAGE="${{ env.IMAGE }}"
