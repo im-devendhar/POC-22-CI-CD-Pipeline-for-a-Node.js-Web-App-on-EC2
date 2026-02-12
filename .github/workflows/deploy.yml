@@ -15,28 +15,41 @@ jobs:
   deploy:
     runs-on: self-hosted   # Runs directly on your EC2 runner
     steps:
+      # 0) Validate required secrets to fail fast with clear message
+      - name: Validate required secrets
+        run: |
+          test -n "${{ secrets.DOCKER_USERNAME }}" || (echo "Missing secret: DOCKER_USERNAME" && exit 1)
+          test -n "${{ secrets.DOCKER_REPO }}"     || (echo "Missing secret: DOCKER_REPO" && exit 1)
+          test -n "${{ secrets.DOCKER_PASSWORD }}" || (echo "Missing secret: DOCKER_PASSWORD" && exit 1)
 
       # 1) Checkout code from repo
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 2) Login to Docker Hub
+      # 2) Show the resolved image name (helps confirm namespace)
+      - name: Show target image
+        run: echo "Target image is: $IMAGE:latest"
+
+      # 3) Fresh login to Docker Hub (logout first to avoid cached sessions)
       - name: Docker Hub Login
         run: |
+          docker logout || true
           echo "${{ secrets.DOCKER_PASSWORD }}" | \
             docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
-      # 3) Build image (node-app)
+      # 4) Build image
       - name: Build image
         run: |
+          echo "Building image $IMAGE:latest ..."
           docker build -t $IMAGE:latest .
 
-      # 4) Push image to Docker Hub (:latest)
+      # 5) Push image to Docker Hub (:latest)
       - name: Push image (:latest)
         run: |
+          echo "Pushing $IMAGE:latest ..."
           docker push $IMAGE:latest
 
-      # 5) Deploy Locally on EC2 using latest image
+      # 6) Deploy locally on EC2 using the latest image
       - name: Deploy locally (stop old → run new → health check)
         run: |
           set -euo pipefail
@@ -44,13 +57,13 @@ jobs:
           NAME="${{ env.CONTAINER_NAME }}"
           NEW_IMAGE="$IMAGE:latest"
 
-          echo "Pulling latest image..."
+          echo "Pulling latest image: $NEW_IMAGE"
           docker pull "$NEW_IMAGE"
 
-          echo "Stopping old container..."
+          echo "Stopping old container (if any): $NAME"
           docker rm -f "$NAME" || true
 
-          echo "Starting new container..."
+          echo "Starting new container: $NAME"
           docker run -d --name "$NAME" -p ${{ env.HOST_PORT }}:${{ env.APP_PORT }} \
             -e NODE_ENV=production \
             "$NEW_IMAGE"
