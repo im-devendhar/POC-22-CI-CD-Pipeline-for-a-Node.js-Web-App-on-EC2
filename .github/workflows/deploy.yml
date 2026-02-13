@@ -1,39 +1,80 @@
-name: Build-Push-Deploy self-hosted EC2
+name: Build → Push → Deploy (self-hosted EC2)
 
 on:
   push:
     branches: ["main"]
   workflow_dispatch:
 
+# Image name: <docker-username>/<repo>
 env:
   IMAGE: ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_REPO }}
   CONTAINER_NAME: webapp
   HOST_PORT: 80
   APP_PORT: 3000
 
+# Prevent overlapping deployments
+concurrency:
+  group: webapp-deploy
+  cancel-in-progress: true
+
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: self-hosted  # Runs directly on your EC2 runner
     steps:
-      - name: Validate secrets
-        run: |
-          test -n "${{ secrets.DOCKER_USERNAME }}" || (echo "Missing secret: DOCKER_USERNAME" && exit 1)
-          test -n "${{ secrets.DOCKER_REPO }}"     || (echo "Missing secret: DOCKER_REPO" && exit 1)
-          test -n "${{ secrets.DOCKER_PASSWORD }}" || (echo "Missing secret: DOCKER_PASSWORD" && exit 1)
-
+      # 1) Checkout code from repo
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show target image
-        run: echo "Target image is: $IMAGE:latest"
-
-      - name: Docker Hub login
+      # 2) Login to Docker Hub
+      - name: Docker Hub Login
         run: |
-          docker logout || true
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          echo "${{ secrets.DOCKER_PASSWORD }}" | \
+            docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
 
+      # 3) Build image
       - name: Build image
-        run: docker build -t $IMAGE:latest .
+        run: |
+          docker build -t "${{ env.IMAGE }}:latest" .
 
-      - name: Push image
-        run: docker push $IMAGE:latest
+      # 4) Push image (:latest)
+      - name: Push image (:latest)
+        run: |
+          docker push "${{ env.IMAGE }}:latest"
+
+      # 5) Deploy locally on EC2 (stop old → run new → health check)
+      - name: Deploy locally (stop old → run new → health check)
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.IMAGE }}"
+          NAME="${{ env.CONTAINER_NAME }}"
+          HOST_PORT="${{ env.HOST_PORT }}"
+          APP_PORT="${{ env.APP_PORT }}"
+          NEW_IMAGE="$IMAGE:latest"
+
+          echo "Pulling latest image..."
+          docker pull "$NEW_IMAGE"
+
+          echo "Stopping old container if it exists..."
+          docker rm -f "$NAME" || true
+
+          echo "Starting new container..."
+          docker run -d \
+            --name "$NAME" \
+            --restart unless-stopped \
+            -p "${HOST_PORT}:${APP_PORT}" \
+            -e NODE_ENV=production \
+            "$NEW_IMAGE"
+
+          echo "Health checking..."
+          for i in {1..12}; do
+            sleep 2
+            if curl -fsS "http://localhost/health" || curl -fsS "http://localhost"; then
+              echo "Health check passed"
+              exit 0
+            fi
+          done
+
+          echo "Health check FAILED"
+          docker logs "$NAME" || true
+          exit 1
