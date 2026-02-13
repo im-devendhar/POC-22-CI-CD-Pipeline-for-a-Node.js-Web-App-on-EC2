@@ -3,6 +3,6 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
-app.get('/', (req, res) => res.send('Hello from Node.js on EC2 via Docker Hub CI/CD!'));
+app.get('/', (req, res) => res.send('Hello from Node.js on EC2 via Docker Hub CI/CD done by Devendhar'));
 
 app.listen(port, '0.0.0.0', () => console.log(`Server listening on ${port}`));
